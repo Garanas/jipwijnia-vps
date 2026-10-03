@@ -12,6 +12,13 @@
 
 set -euo pipefail
 
+# The deploy user is not in the docker group: it runs this script as root through the sudo rule
+# that setup.sh installs (/etc/sudoers.d/vault-deploy, this exact path and no arguments).
+if [[ $EUID -ne 0 ]]; then
+    exec sudo -n /usr/local/bin/vault-deploy
+fi
+export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
 cd /opt/vault
 docker compose pull --quiet vault
 docker compose up -d vault

@@ -21,6 +21,9 @@ services:
       # Every router on websecure gets a certificate from Let's Encrypt, so services only need
       # a Host rule. The HTTP-01 challenge is answered on port 80 before the redirect.
       - --entrypoints.websecure.http.tls.certresolver=letsencrypt
+      # Security headers on every site; the middleware is in traefik-dynamic.yaml.
+      - --entrypoints.websecure.http.middlewares=security-headers@file
+      - --providers.file.filename=/etc/traefik/dynamic.yaml
       - --certificatesresolvers.letsencrypt.acme.email=${ACME_EMAIL:-}
       - --certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json
       - --certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web
@@ -29,6 +32,9 @@ services:
       - "443:443"
     volumes:
       - letsencrypt:/letsencrypt
+    configs:
+      - source: traefik-dynamic
+        target: /etc/traefik/dynamic.yaml
     networks: [socket, vault, stats]
     depends_on: [socket-proxy]
     read_only: true
@@ -71,8 +77,8 @@ services:
 
   # Visitor statistics (goatcounter.com): no cookies, no personal data, SQLite in a volume.
   # The vault counts itself (Analytics:GoatCounter in its appsettings.Production.json).
-  # Create the first site from the command line right after the first start, before anyone
-  # else can reach the setup wizard; see README.md.
+  # Create the first site from the command line before the first start, so nobody else can reach
+  # the setup wizard; see README.md.
   goatcounter:
     image: arp242/goatcounter:2.7
     restart: unless-stopped
@@ -85,6 +91,12 @@ services:
       traefik.http.routers.stats.rule: Host(`${STATS_HOST:-stats.jipwijnia.nl}`)
       traefik.http.routers.stats.entrypoints: websecure
       traefik.http.services.stats.loadbalancer.server.port: "8080"
+
+# A file, not inline content: Compose copies inline content into the container, which a read-only
+# container refuses; a file is mounted.
+configs:
+  traefik-dynamic:
+    file: ./traefik-dynamic.yaml
 
 # Each site shares a network with Traefik only. IPv6 on the networks Traefik is published from, so
 # IPv6 visitors reach it with their own address (otherwise docker-proxy relays them over IPv4, and

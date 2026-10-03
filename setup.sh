@@ -11,8 +11,9 @@
 #   - firewall: only SSH (rate limited), HTTP and HTTPS; automatic security updates (Ubuntu and
 #     Docker Engine) with a nightly reboot when one needs it; 2 GB swap
 #   - Docker Engine + compose plugin, with log rotation and no-new-privileges for every container
-#   - a "deploy" user for GitHub Actions whose key may only run vault-deploy (vault-deploy.sh)
-#   - /opt/vault with compose.yaml and .env (fill in .env, then `docker compose up -d`)
+#   - a "deploy" user for GitHub Actions whose key may only run vault-deploy (vault-deploy.sh),
+#     as root through a sudo rule
+#   - /opt/vault with compose.yaml, traefik-dynamic.yaml and .env (see the steps at the end)
 #   - a weekly timer that pulls new Traefik, socket-proxy and GoatCounter images (stack-update)
 
 set -euo pipefail
@@ -147,15 +148,24 @@ systemctl restart docker
 usermod -aG docker "$USER_NAME"
 
 step "Deploy user for GitHub Actions"
-# Logs in with a key that may only run vault-deploy (see vault-deploy.sh). Both the script and the
-# authorized_keys file are root-owned, so the user cannot change what its key is allowed to do.
+# Logs in with a key that may only run vault-deploy (see vault-deploy.sh), which runs itself as root
+# through the sudo rule below, with no arguments. The script, the rule and the authorized_keys file
+# are root-owned, so the user cannot change what its key is allowed to do. It is not in the docker
+# group: a key added without the forced command gives an unprivileged shell, not root.
 if ! id deploy &>/dev/null; then
     adduser --disabled-password --gecos "" deploy
 fi
-usermod -aG docker deploy
 curl -fsSL "$RAW/vault-deploy.sh" -o /usr/local/bin/vault-deploy
 chown root:root /usr/local/bin/vault-deploy
 chmod 755 /usr/local/bin/vault-deploy
+sudoers=$(mktemp)
+echo 'deploy ALL=(root) NOPASSWD: /usr/local/bin/vault-deploy ""' > "$sudoers"
+visudo -cf "$sudoers"
+install -m 440 -o root -g root "$sudoers" /etc/sudoers.d/vault-deploy
+rm -f "$sudoers"
+if id -nG deploy | grep -qw docker; then
+    gpasswd -d deploy docker
+fi
 install -d -m 755 -o root -g root /home/deploy/.ssh
 if [[ ! -f /home/deploy/.ssh/authorized_keys ]]; then
     install -m 644 -o root -g root /dev/null /home/deploy/.ssh/authorized_keys
@@ -164,13 +174,13 @@ fi
 step "Stack in $STACK_DIR"
 install -d -o "$USER_NAME" -g "$USER_NAME" "$STACK_DIR"
 curl -fsSL "$RAW/compose.yaml" -o "$STACK_DIR/compose.yaml"
+curl -fsSL "$RAW/traefik-dynamic.yaml" -o "$STACK_DIR/traefik-dynamic.yaml"
 if [[ ! -f "$STACK_DIR/.env" ]]; then
     curl -fsSL "$RAW/.env.example" -o "$STACK_DIR/.env"
 fi
-chown "$USER_NAME:$USER_NAME" "$STACK_DIR/compose.yaml"
-# Not world-readable: settings may hold secrets. The docker group (the deploy user) needs to read it.
-chown "$USER_NAME:docker" "$STACK_DIR/.env"
-chmod 640 "$STACK_DIR/.env"
+chown "$USER_NAME:$USER_NAME" "$STACK_DIR/compose.yaml" "$STACK_DIR/traefik-dynamic.yaml" "$STACK_DIR/.env"
+# Only yours: settings may hold secrets. Deploys read it as root.
+chmod 600 "$STACK_DIR/.env"
 
 step "Weekly image updates"
 # Security fixes for Traefik, the socket proxy and GoatCounter arrive as new images under the same
@@ -209,6 +219,7 @@ cat <<EOF
 Done. Next:
   1. Log in as $USER_NAME in a NEW terminal (keep this one open until that works):
        ssh $USER_NAME@<server>
-  2. Fill in $STACK_DIR/.env (ACME_EMAIL), check that DNS for the vault host points here, then:
+  2. Fill in $STACK_DIR/.env (ACME_EMAIL), check that DNS for the vault host points here.
+  3. On a new server, create the GoatCounter site before the first start (see README.md), then:
        cd $STACK_DIR && docker compose up -d
 EOF

@@ -16,11 +16,13 @@ visitor's browser and only serves files. Measured: Traefik ~30 MB, the vault ~20
 | `compose.yaml` | The stack: Traefik (HTTP → HTTPS, a certificate per host name) with a read-only Docker socket proxy, the vault, GoatCounter. Lives in `/opt/vault` on the server. |
 | `.env.example` | Settings next to `compose.yaml` (`ACME_EMAIL`, host names, `VAULT_IMAGE`). The real `.env` exists only on the server. |
 | `setup.sh` | One-time setup of a fresh Ubuntu VPS: admin user, SSH keys only, firewall, automatic updates, swap, Docker, the `deploy` user, `/opt/vault`, weekly image updates. Safe to run again. |
-| `vault-deploy.sh` | Pulls the vault image and restarts it; installed as `/usr/local/bin/vault-deploy`, the only command the deploy key may run. |
+| `traefik-dynamic.yaml` | Traefik settings that belong to no single site: the security headers (HSTS) on every site. Next to `compose.yaml` on the server. |
+| `vault-deploy.sh` | Pulls the vault image and restarts it; installed as `/usr/local/bin/vault-deploy`, the only command the deploy key may run (as root, through a sudo rule). |
 | `compose.local.yaml` | Override to try the stack on your own machine, without Let's Encrypt. |
 
 **Never commit secrets.** This repository is public: `.env` is gitignored, keys live in GitHub
-secrets and on the server only. GitHub push protection is on as a second line.
+secrets and on the server only. GitHub push protection is on as a second line. `main` is what the
+server runs, so a ruleset protects it: no force-pushes, no deletion.
 
 ## Try it locally
 
@@ -55,20 +57,21 @@ start with `VAULT_IMAGE=scfa-cs-replay:local`.
 3. **DNS** at TransIP: `A` and `AAAA` records for `vault` and `stats` pointing at the VPS
    (`37.97.229.165`, `2a01:7c8:fffd:f5:5054:ff:fe11:fd0d`). Leave `@`, `www` and `MX` alone: the
    website and mail stay where they are.
-4. **Stack**: fill in `ACME_EMAIL` in `/opt/vault/.env`, then `cd /opt/vault && docker compose up -d`.
-   Traefik requests a certificate per host name on the first HTTPS request.
-5. **GoatCounter**: create the site and your account right away, before anyone else can open the
-   setup wizard at https://stats.jipwijnia.nl:
+4. **Stack**: fill in `ACME_EMAIL` in `/opt/vault/.env`. Create the GoatCounter site and your
+   account *before* the first start, so nobody else can open its setup wizard (it asks for a
+   password), then start everything:
    ```sh
-   docker compose exec goatcounter goatcounter db create site -vhost=stats.jipwijnia.nl -user.email=<you>
+   cd /opt/vault
+   docker compose run --rm goatcounter db create site -createdb -vhost=stats.jipwijnia.nl -user.email=<you>
+   docker compose up -d
    ```
-6. **Deploy key** for the vault: see below.
+   Traefik requests a certificate per host name on the first HTTPS request.
+5. **Deploy key** for the vault: see below.
 
 What `setup.sh` leaves you with: SSH with keys only (`MaxAuthTries 3`, no root, only members of
 `sudo` and `deploy`), `ufw` allowing only 22 (rate limited), 80 and 443, unattended upgrades for
 Ubuntu and Docker Engine with a reboot at 04:30 when needed, 2 GB swap, container logs capped at
-3 × 10 MB, `no-new-privileges` for every container, and `.env` readable only by you and the `docker`
-group. Mind that ports published by Docker bypass `ufw`: only Traefik publishes ports; every site is
+3 × 10 MB, `no-new-privileges` for every container, and `.env` readable only by you. Mind that ports published by Docker bypass `ufw`: only Traefik publishes ports; every site is
 reached through it.
 
 How the stack is locked down:
@@ -78,17 +81,24 @@ How the stack is locked down:
   published from have IPv6, so IPv6 visitors keep their own address (rate limits, statistics).
 - The vault runs as UID 1654, read-only, without capabilities, whatever its image says: the image is
   the part CI can change.
+- Every site gets HSTS (HTTPS only, for a year) and `X-Content-Type-Options: nosniff` from
+  `traefik-dynamic.yaml`. Only the subdomains on this server: `jipwijnia.nl` itself is elsewhere.
+- The `deploy` user is not in the `docker` group; its key runs `vault-deploy` as root through
+  `/etc/sudoers.d/vault-deploy` (that path, no arguments). A key added without `command=` would
+  give an ordinary shell, not root.
 - `stack-update.timer` pulls new Traefik, socket-proxy and GoatCounter images on Sunday at 04:00
   (`systemctl list-timers stack-update`, `journalctl -u stack-update`). Unattended upgrades do not
   touch images. Moving to a new minor version (e.g. `traefik:v3.8`) is a change to `compose.yaml`.
 
 ## Changing the stack
 
-Edit `compose.yaml` here, push to `main`, then on the server:
+Edit `compose.yaml` (or `traefik-dynamic.yaml`) here, push to `main`, then on the server:
 
 ```sh
 cd /opt/vault
-curl -fsSL https://raw.githubusercontent.com/Garanas/jipwijnia-vps/main/compose.yaml -o compose.yaml
+for f in compose.yaml traefik-dynamic.yaml; do
+    curl -fsSL "https://raw.githubusercontent.com/Garanas/jipwijnia-vps/main/$f" -o "$f"
+done
 docker compose pull && docker compose up -d
 ```
 
@@ -99,8 +109,8 @@ service that leaves a network behind (e.g. after a rename) needs a `docker netwo
 
 Releases come from the scfa-cs-replay repository: `git push origin main:deploy/production` tests,
 builds and pushes `ghcr.io/garanas/scfa-cs-replay:latest` and `:sha-<commit>`, then its `deploy` job
-connects as the user `deploy` and runs `vault-deploy`: pull the image, restart the vault. Nothing
-else. The commit that is live shows in the vault's footer.
+connects as the user `deploy` and runs `vault-deploy` (as root, through its sudo rule): pull the
+image, restart the vault. Nothing else. The commit that is live shows in the vault's footer.
 
 Roll back by setting `VAULT_IMAGE=ghcr.io/garanas/scfa-cs-replay:sha-<commit>` in `/opt/vault/.env`
 and running `docker compose up -d`; while that pin is in place, deploys keep pulling the pinned image.
@@ -129,6 +139,8 @@ and running `docker compose up -d`; while that pin is in place, deploys keep pul
 Troubleshooting: `Permission denied (publickey)` in the deploy job → on the server,
 `sudo journalctl -u ssh --since "30 min ago" | grep deploy` and
 `sudo ssh-keygen -lf /home/deploy/.ssh/authorized_keys` (the fingerprints must match).
+`sudo: ... can't do that` or `a password is required` → `sudo -l -U deploy` must list
+`/usr/local/bin/vault-deploy ""`; rerun `setup.sh` to restore the rule.
 
 ## Adding a site
 

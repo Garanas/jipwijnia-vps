@@ -1,0 +1,10 @@
+# Traefik's dynamic configuration, next to compose.yaml on the server (mounted by the traefik
+# service): what labels cannot hold because it belongs to no single site.
+http:
+  middlewares:
+    # On every site (websecure entrypoint). HSTS: browsers use HTTPS only for a year, on these
+    # host names (not on jipwijnia.nl itself, which is hosted elsewhere).
+    security-headers:
+      headers:
+        stsSeconds: 31536000
+        contentTypeNosniff: true

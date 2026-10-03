@@ -15,6 +15,9 @@ services:
       - --entrypoints.web.address=:80
       - --entrypoints.websecure.address=:443
       - --entrypoints.websecure.http.tls=true
+      # Browsers ignore HSTS behind a self-signed certificate, so the headers are harmless here.
+      - --entrypoints.websecure.http.middlewares=security-headers@file
+      - --providers.file.filename=/etc/traefik/dynamic.yaml
 
   vault:
     labels:
