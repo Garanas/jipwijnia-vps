@@ -1,0 +1,28 @@
+# Catches mistakes before they reach the server: the scripts pass shellcheck and the compose files
+# parse (with .env.example as .env). Nothing here touches the VPS.
+
+name: Check
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Shellcheck
+        run: shellcheck setup.sh vault-deploy.sh
+
+      - name: Compose files
+        run: |
+          cp .env.example .env
+          docker compose -f compose.yaml config --quiet
+          docker compose -f compose.yaml -f compose.local.yaml config --quiet

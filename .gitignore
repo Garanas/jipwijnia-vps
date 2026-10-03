@@ -1,0 +1,10 @@
+# The real settings exist only on the server; this repository is public.
+.env
+*.env
+!.env.example
+
+# Keys must never land here, not even by accident.
+id_*
+*.pem
+*.key
+github-deploy*
