@@ -7,10 +7,12 @@
 
 services:
   traefik:
-    image: traefik:v3.6
+    image: traefik:v3.7
     restart: unless-stopped
     command:
       - --providers.docker=true
+      # Through the socket proxy: the Docker socket itself would give Traefik root on the host.
+      - --providers.docker.endpoint=tcp://socket-proxy:2375
       - --providers.docker.exposedbydefault=false
       - --entrypoints.web.address=:80
       - --entrypoints.web.http.redirections.entrypoint.to=websecure
@@ -26,17 +28,41 @@ services:
       - "80:80"
       - "443:443"
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
       - letsencrypt:/letsencrypt
+    networks: [socket, vault, stats]
+    depends_on: [socket-proxy]
+    read_only: true
+    cap_drop: [ALL]
+    cap_add: [NET_BIND_SERVICE]
+    security_opt: [no-new-privileges:true]
+
+  # Lets Traefik read which containers exist (GET /containers, /events) and nothing else.
+  socket-proxy:
+    image: tecnativa/docker-socket-proxy:v0.5.0
+    restart: unless-stopped
+    environment:
+      CONTAINERS: 1
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks: [socket]
+    mem_limit: 64m
 
   vault:
     image: ${VAULT_IMAGE:-ghcr.io/garanas/scfa-cs-replay:latest}
     restart: unless-stopped
     environment:
-      # Trust X-Forwarded-For from Traefik: the container publishes no ports, so only Traefik
-      # reaches it. The token proxy rate-limits per client address.
+      # Trust X-Forwarded-For from Traefik: the container publishes no ports and shares its
+      # network only with Traefik. The token proxy rate-limits per client address.
       ASPNETCORE_FORWARDEDHEADERS_ENABLED: "true"
+    # The image comes from CI, so what it may do is fixed here rather than in the image: the
+    # non-root "app" user of the chiseled .NET image, no capabilities, nothing writable but /tmp.
+    user: "1654:1654"
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
     mem_limit: 256m
+    networks: [vault]
     labels:
       traefik.enable: "true"
       traefik.http.routers.vault.rule: Host(`${VAULT_HOST:-vault.jipwijnia.nl}`)
@@ -53,11 +79,23 @@ services:
     volumes:
       - goatcounter:/home/goatcounter/goatcounter-data
     mem_limit: 128m
+    networks: [stats]
     labels:
       traefik.enable: "true"
       traefik.http.routers.stats.rule: Host(`${STATS_HOST:-stats.jipwijnia.nl}`)
       traefik.http.routers.stats.entrypoints: websecure
       traefik.http.services.stats.loadbalancer.server.port: "8080"
+
+# Each site shares a network with Traefik only. IPv6 on the networks Traefik is published from, so
+# IPv6 visitors reach it with their own address (otherwise docker-proxy relays them over IPv4, and
+# they all show up as the bridge gateway).
+networks:
+  socket:
+    internal: true
+  vault:
+    enable_ipv6: true
+  stats:
+    enable_ipv6: true
 
 volumes:
   letsencrypt:

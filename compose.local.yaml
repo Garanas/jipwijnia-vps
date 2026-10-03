@@ -10,6 +10,7 @@ services:
   traefik:
     command:
       - --providers.docker=true
+      - --providers.docker.endpoint=tcp://socket-proxy:2375
       - --providers.docker.exposedbydefault=false
       - --entrypoints.web.address=:80
       - --entrypoints.websecure.address=:443
@@ -29,3 +30,10 @@ services:
       traefik.http.routers.stats-http.rule: Host(`stats.localhost`)
       traefik.http.routers.stats-http.entrypoints: web
       traefik.http.routers.stats-http.service: stats
+
+# Not needed locally, and older Docker versions cannot pick an IPv6 subnet by themselves.
+networks:
+  vault:
+    enable_ipv6: false
+  stats:
+    enable_ipv6: false

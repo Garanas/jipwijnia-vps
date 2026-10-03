@@ -8,11 +8,12 @@
 # It is safe to run again. What it does:
 #   - a sudo user (the argument; default "willemwijnia") with the SSH keys of root / the invoking user
 #   - SSH: keys only, no root login (only once that user has a key, so you cannot lock yourself out)
-#   - firewall: only SSH (rate limited), HTTP and HTTPS; automatic security updates with a
-#     nightly reboot when one needs it; 2 GB swap
-#   - Docker Engine + compose plugin, with log rotation
+#   - firewall: only SSH (rate limited), HTTP and HTTPS; automatic security updates (Ubuntu and
+#     Docker Engine) with a nightly reboot when one needs it; 2 GB swap
+#   - Docker Engine + compose plugin, with log rotation and no-new-privileges for every container
 #   - a "deploy" user for GitHub Actions whose key may only run vault-deploy (vault-deploy.sh)
 #   - /opt/vault with compose.yaml and .env (fill in .env, then `docker compose up -d`)
+#   - a weekly timer that pulls new Traefik, socket-proxy and GoatCounter images (stack-update)
 
 set -euo pipefail
 
@@ -43,6 +44,13 @@ cat > /etc/apt/apt.conf.d/52auto-reboot <<'EOF'
 Unattended-Upgrade::Automatic-Reboot "true";
 Unattended-Upgrade::Automatic-Reboot-Time "04:30";
 Unattended-Upgrade::Remove-Unused-Kernel-Packages "true";
+EOF
+# Docker Engine, containerd and runc come from Docker's repository, which the default origins leave
+# out; their fixes are the ones that keep containers contained. The containers restart by themselves.
+cat > /etc/apt/apt.conf.d/52unattended-upgrades-docker <<'EOF'
+Unattended-Upgrade::Origins-Pattern {
+    "origin=Docker,label=Docker CE,archive=${distro_codename}";
+};
 EOF
 timedatectl set-timezone Europe/Amsterdam
 
@@ -77,10 +85,12 @@ fi
 step "SSH hardening"
 # Only lock root out once the new user can both log in (key) and administer (sudo).
 if [[ -s "$USER_HOME/.ssh/authorized_keys" ]] && can_sudo; then
+    # AllowGroups: admins (sudo) and the deploy user only, also for accounts added later.
     cat > /etc/ssh/sshd_config.d/10-hardening.conf <<'EOF'
 PasswordAuthentication no
 KbdInteractiveAuthentication no
 PermitRootLogin no
+AllowGroups sudo deploy
 MaxAuthTries 3
 LoginGraceTime 30
 X11Forwarding no
@@ -124,11 +134,13 @@ if ! command -v docker &>/dev/null; then
     apt-get update -q
     apt-get install -yq docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 fi
-# Container logs are kept small: the disk is not for logs.
+# Container logs are kept small: the disk is not for logs. No process in a container may gain
+# privileges (setuid binaries), whatever its image or compose file says.
 cat > /etc/docker/daemon.json <<'EOF'
 {
   "log-driver": "json-file",
-  "log-opts": { "max-size": "10m", "max-file": "3" }
+  "log-opts": { "max-size": "10m", "max-file": "3" },
+  "no-new-privileges": true
 }
 EOF
 systemctl restart docker
@@ -155,7 +167,42 @@ curl -fsSL "$RAW/compose.yaml" -o "$STACK_DIR/compose.yaml"
 if [[ ! -f "$STACK_DIR/.env" ]]; then
     curl -fsSL "$RAW/.env.example" -o "$STACK_DIR/.env"
 fi
-chown "$USER_NAME:$USER_NAME" "$STACK_DIR/compose.yaml" "$STACK_DIR/.env"
+chown "$USER_NAME:$USER_NAME" "$STACK_DIR/compose.yaml"
+# Not world-readable: settings may hold secrets. The docker group (the deploy user) needs to read it.
+chown "$USER_NAME:docker" "$STACK_DIR/.env"
+chmod 640 "$STACK_DIR/.env"
+
+step "Weekly image updates"
+# Security fixes for Traefik, the socket proxy and GoatCounter arrive as new images under the same
+# tags; this pulls them on Sunday night. It only restarts what compose.yaml already describes, so
+# rolling out compose.yaml stays manual. The vault is updated by its own deploys.
+cat > /etc/systemd/system/stack-update.service <<EOF
+[Unit]
+Description=Pull new Traefik, socket-proxy and GoatCounter images and restart them
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=$STACK_DIR
+ExecStart=/usr/bin/docker compose pull --quiet traefik socket-proxy goatcounter
+ExecStart=/usr/bin/docker compose up -d traefik socket-proxy goatcounter
+ExecStart=/usr/bin/docker image prune -f
+EOF
+cat > /etc/systemd/system/stack-update.timer <<'EOF'
+[Unit]
+Description=Weekly image updates for the stack in /opt/vault
+
+[Timer]
+OnCalendar=Sun *-*-* 04:00:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+EOF
+systemctl daemon-reload
+systemctl enable --now stack-update.timer
 
 cat <<EOF
 

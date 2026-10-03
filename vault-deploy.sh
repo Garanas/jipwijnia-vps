@@ -6,8 +6,9 @@
 #
 #   command="/usr/local/bin/vault-deploy",restrict ssh-ed25519 AAAA... github-deploy
 #
-# Only the image changes: compose.yaml and .env stay manual on purpose. A new image runs non-root
-# without host access; a changed compose file could mount the host, so it is not for a CI key.
+# Only the image changes: compose.yaml and .env stay manual on purpose. compose.yaml runs any new
+# image non-root, read-only, without capabilities or host access; a changed compose file could
+# mount the host, so it is not for a CI key.
 
 set -euo pipefail
 

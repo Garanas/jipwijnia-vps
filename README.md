@@ -13,9 +13,9 @@ visitor's browser and only serves files. Measured: Traefik ~30 MB, the vault ~20
 
 | File | What |
 |---|---|
-| `compose.yaml` | The stack: Traefik (HTTP → HTTPS, a certificate per host name), the vault, GoatCounter. Lives in `/opt/vault` on the server. |
+| `compose.yaml` | The stack: Traefik (HTTP → HTTPS, a certificate per host name) with a read-only Docker socket proxy, the vault, GoatCounter. Lives in `/opt/vault` on the server. |
 | `.env.example` | Settings next to `compose.yaml` (`ACME_EMAIL`, host names, `VAULT_IMAGE`). The real `.env` exists only on the server. |
-| `setup.sh` | One-time setup of a fresh Ubuntu VPS: admin user, SSH keys only, firewall, automatic updates, swap, Docker, the `deploy` user, `/opt/vault`. Safe to run again. |
+| `setup.sh` | One-time setup of a fresh Ubuntu VPS: admin user, SSH keys only, firewall, automatic updates, swap, Docker, the `deploy` user, `/opt/vault`, weekly image updates. Safe to run again. |
 | `vault-deploy.sh` | Pulls the vault image and restarts it; installed as `/usr/local/bin/vault-deploy`, the only command the deploy key may run. |
 | `compose.local.yaml` | Override to try the stack on your own machine, without Let's Encrypt. |
 
@@ -64,10 +64,23 @@ start with `VAULT_IMAGE=scfa-cs-replay:local`.
    ```
 6. **Deploy key** for the vault: see below.
 
-What `setup.sh` leaves you with: SSH with keys only (`MaxAuthTries 3`, no root), `ufw` allowing only
-22 (rate limited), 80 and 443, unattended upgrades with a reboot at 04:30 when needed, 2 GB swap, and
-container logs capped at 3 × 10 MB. Mind that ports published by Docker bypass `ufw`: only Traefik
-publishes ports; every site is reached through it.
+What `setup.sh` leaves you with: SSH with keys only (`MaxAuthTries 3`, no root, only members of
+`sudo` and `deploy`), `ufw` allowing only 22 (rate limited), 80 and 443, unattended upgrades for
+Ubuntu and Docker Engine with a reboot at 04:30 when needed, 2 GB swap, container logs capped at
+3 × 10 MB, `no-new-privileges` for every container, and `.env` readable only by you and the `docker`
+group. Mind that ports published by Docker bypass `ufw`: only Traefik publishes ports; every site is
+reached through it.
+
+How the stack is locked down:
+- Traefik reads containers through `socket-proxy`, which allows only `GET` on containers and events;
+  the Docker socket itself would make a Traefik bug root on the host.
+- Each site shares a network only with Traefik, not with the other sites. The networks Traefik is
+  published from have IPv6, so IPv6 visitors keep their own address (rate limits, statistics).
+- The vault runs as UID 1654, read-only, without capabilities, whatever its image says: the image is
+  the part CI can change.
+- `stack-update.timer` pulls new Traefik, socket-proxy and GoatCounter images on Sunday at 04:00
+  (`systemctl list-timers stack-update`, `journalctl -u stack-update`). Unattended upgrades do not
+  touch images. Moving to a new minor version (e.g. `traefik:v3.8`) is a change to `compose.yaml`.
 
 ## Changing the stack
 
@@ -79,7 +92,8 @@ curl -fsSL https://raw.githubusercontent.com/Garanas/jipwijnia-vps/main/compose.
 docker compose pull && docker compose up -d
 ```
 
-This stays manual on purpose: a compose file can mount the host, so it is not for a CI key.
+This stays manual on purpose: a compose file can mount the host, so it is not for a CI key. A
+service that leaves a network behind (e.g. after a rename) needs a `docker network rm vault_<name>`.
 
 ## Releasing the vault
 
@@ -118,21 +132,32 @@ Troubleshooting: `Permission denied (publickey)` in the deploy job → on the se
 
 ## Adding a site
 
-Add a service with its own labels; Traefik picks it up and requests its certificate:
+Add a service with its own labels and its own network, and add that network to Traefik's
+`networks:`; Traefik picks it up and requests its certificate:
 
 ```yaml
+services:
+  traefik:
+    networks: [socket, vault, stats, website]
+
   website:
     image: nginx:alpine
     restart: unless-stopped
     volumes:
       - ./website:/usr/share/nginx/html:ro
+    networks: [website]
     labels:
       traefik.enable: "true"
       traefik.http.routers.website.rule: Host(`jipwijnia.nl`) || Host(`www.jipwijnia.nl`)
       traefik.http.routers.website.entrypoints: websecure
+
+networks:
+  website:
+    enable_ipv6: true
 ```
 
-Then point its DNS records at the VPS. Never give a site `ports:`; Traefik is the only way in.
+Then point its DNS records at the VPS. Never give a site `ports:`; Traefik is the only way in. A
+site without a network shared with Traefik gets a `504 Gateway Timeout`.
 
 ## Backups
 
