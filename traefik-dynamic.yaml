@@ -8,3 +8,37 @@ http:
       headers:
         stsSeconds: 31536000
         contentTypeNosniff: true
+
+    # On every site: zstd, brotli or gzip for what is not compressed yet (the vault's framework
+    # files already are).
+    compress:
+      compress: {}
+
+    # On every site: a page instead of Traefik's bare text while a site restarts or is down.
+    # Only 502-504: the vault's app reads its API's 4xx answers as JSON, so those pass untouched.
+    error-pages:
+      errors:
+        status: ["502-504"]
+        service: error-pages
+        query: /{status}.html
+
+    # For the catch-all router below.
+    not-found:
+      replacePath:
+        path: /404.html
+
+  routers:
+    # Host names nobody serves (e.g. the bare IP address): a 404 page. Lowest priority, so every
+    # site's own Host rule wins.
+    catch-all:
+      rule: HostRegexp(`.+`)
+      priority: 1
+      entryPoints: [websecure]
+      middlewares: [not-found]
+      service: error-pages
+
+  services:
+    error-pages:
+      loadBalancer:
+        servers:
+          - url: http://error-pages:8080

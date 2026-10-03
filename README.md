@@ -13,11 +13,12 @@ visitor's browser and only serves files. Measured: Traefik ~30 MB, the vault ~20
 
 | File | What |
 |---|---|
-| `compose.yaml` | The stack: Traefik (HTTP → HTTPS, a certificate per host name) with a read-only Docker socket proxy, the vault, GoatCounter. Lives in `/opt/vault` on the server. |
+| `compose.yaml` | The stack: Traefik (HTTP → HTTPS, a certificate per host name) with a read-only Docker socket proxy, the vault, GoatCounter, error pages. Lives in `/opt/vault` on the server. |
 | `.env.example` | Settings next to `compose.yaml` (`ACME_EMAIL`, host names, `VAULT_IMAGE`). The real `.env` exists only on the server. |
 | `setup.sh` | One-time setup of a fresh Ubuntu VPS: admin user, SSH keys only, firewall, automatic updates, swap, Docker, the `deploy` user, `/opt/vault`, weekly image updates. Safe to run again. |
-| `traefik-dynamic.yaml` | Traefik settings that belong to no single site: the security headers (HSTS) on every site. Next to `compose.yaml` on the server. |
+| `traefik-dynamic.yaml` | Traefik settings that belong to no single site: security headers (HSTS), compression and error pages on every site, a 404 page for unknown host names. Next to `compose.yaml` on the server. |
 | `vault-deploy.sh` | Pulls the vault image and restarts it; installed as `/usr/local/bin/vault-deploy`, the only command the deploy key may run (as root, through a sudo rule). |
+| `stack-update.sh` | Pulls new images for everything but the vault and restarts what changed; installed as `/usr/local/bin/stack-update`, run weekly by `stack-update.timer`. |
 | `compose.local.yaml` | Override to try the stack on your own machine, without Let's Encrypt. |
 
 **Never commit secrets.** This repository is public: `.env` is gitignored, keys live in GitHub
@@ -71,8 +72,9 @@ start with `VAULT_IMAGE=scfa-cs-replay:local`.
 What `setup.sh` leaves you with: SSH with keys only (`MaxAuthTries 3`, no root, only members of
 `sudo` and `deploy`), `ufw` allowing only 22 (rate limited), 80 and 443, unattended upgrades for
 Ubuntu and Docker Engine with a reboot at 04:30 when needed, 2 GB swap, container logs capped at
-3 × 10 MB, `no-new-privileges` for every container, and `.env` readable only by you. Mind that ports published by Docker bypass `ufw`: only Traefik publishes ports; every site is
-reached through it.
+3 × 10 MB, `no-new-privileges` for every container, and `.env` readable only by you. Mind that
+ports published by Docker bypass `ufw`: only Traefik publishes ports; every site is reached
+through it.
 
 How the stack is locked down:
 - Traefik reads containers through `socket-proxy`, which allows only `GET` on containers and events;
@@ -86,9 +88,16 @@ How the stack is locked down:
 - The `deploy` user is not in the `docker` group; its key runs `vault-deploy` as root through
   `/etc/sudoers.d/vault-deploy` (that path, no arguments). A key added without `command=` would
   give an ordinary shell, not root.
-- `stack-update.timer` pulls new Traefik, socket-proxy and GoatCounter images on Sunday at 04:00
+- `stack-update.timer` pulls new images for every service but the vault on Sunday at 04:00
   (`systemctl list-timers stack-update`, `journalctl -u stack-update`). Unattended upgrades do not
   touch images. Moving to a new minor version (e.g. `traefik:v3.8`) is a change to `compose.yaml`.
+
+What visitors get from `traefik-dynamic.yaml`, on every site: compression (zstd, brotli or gzip) for
+what the site does not compress itself, and an error page (`error-pages`, template `app-down`;
+others: `ghost`, `l7`, `noise`, … via `TEMPLATE_NAME`) instead of Traefik's bare text when a site
+answers 502–504, e.g. during a restart. Other statuses pass untouched: the vault's app reads its
+API's 4xx answers as JSON. Host names nobody serves, and the bare IP address, get a 404 page; so does
+a site whose container is being replaced, for the second or two it does not exist.
 
 ## Changing the stack
 

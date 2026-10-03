@@ -14,7 +14,7 @@
 #   - a "deploy" user for GitHub Actions whose key may only run vault-deploy (vault-deploy.sh),
 #     as root through a sudo rule
 #   - /opt/vault with compose.yaml, traefik-dynamic.yaml and .env (see the steps at the end)
-#   - a weekly timer that pulls new Traefik, socket-proxy and GoatCounter images (stack-update)
+#   - a weekly timer that pulls new images for everything but the vault (stack-update.sh)
 
 set -euo pipefail
 
@@ -183,22 +183,20 @@ chown "$USER_NAME:$USER_NAME" "$STACK_DIR/compose.yaml" "$STACK_DIR/traefik-dyna
 chmod 600 "$STACK_DIR/.env"
 
 step "Weekly image updates"
-# Security fixes for Traefik, the socket proxy and GoatCounter arrive as new images under the same
-# tags; this pulls them on Sunday night. It only restarts what compose.yaml already describes, so
-# rolling out compose.yaml stays manual. The vault is updated by its own deploys.
-cat > /etc/systemd/system/stack-update.service <<EOF
+# Security fixes arrive as new images under the same tags; see stack-update.sh.
+curl -fsSL "$RAW/stack-update.sh" -o /usr/local/bin/stack-update
+chown root:root /usr/local/bin/stack-update
+chmod 755 /usr/local/bin/stack-update
+cat > /etc/systemd/system/stack-update.service <<'EOF'
 [Unit]
-Description=Pull new Traefik, socket-proxy and GoatCounter images and restart them
+Description=Pull new images for the stack in /opt/vault (all but the vault) and restart them
 Requires=docker.service
 After=docker.service network-online.target
 Wants=network-online.target
 
 [Service]
 Type=oneshot
-WorkingDirectory=$STACK_DIR
-ExecStart=/usr/bin/docker compose pull --quiet traefik socket-proxy goatcounter
-ExecStart=/usr/bin/docker compose up -d traefik socket-proxy goatcounter
-ExecStart=/usr/bin/docker image prune -f
+ExecStart=/usr/local/bin/stack-update
 EOF
 cat > /etc/systemd/system/stack-update.timer <<'EOF'
 [Unit]

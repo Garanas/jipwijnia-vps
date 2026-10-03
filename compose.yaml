@@ -1,6 +1,6 @@
 # Everything that runs on the VPS: Traefik in front (HTTPS with Let's Encrypt, HTTP → HTTPS), the
-# replay vault (github.com/Garanas/scfa-cs-replay) and GoatCounter. Other sites, such as jipwijnia.nl,
-# join as extra services with their own traefik.* labels. See README.md.
+# replay vault (github.com/Garanas/scfa-cs-replay), GoatCounter and error pages. Other sites, such as
+# jipwijnia.nl, join as extra services with their own traefik.* labels. See README.md.
 #
 #   cp .env.example .env    # once, then fill it in
 #   docker compose pull && docker compose up -d
@@ -21,8 +21,9 @@ services:
       # Every router on websecure gets a certificate from Let's Encrypt, so services only need
       # a Host rule. The HTTP-01 challenge is answered on port 80 before the redirect.
       - --entrypoints.websecure.http.tls.certresolver=letsencrypt
-      # Security headers on every site; the middleware is in traefik-dynamic.yaml.
-      - --entrypoints.websecure.http.middlewares=security-headers@file
+      # On every site, defined in traefik-dynamic.yaml: security headers, compression, and an error
+      # page while a site is down. Also there: the 404 page for host names nobody serves.
+      - --entrypoints.websecure.http.middlewares=security-headers@file,compress@file,error-pages@file
       - --providers.file.filename=/etc/traefik/dynamic.yaml
       - --certificatesresolvers.letsencrypt.acme.email=${ACME_EMAIL:-}
       - --certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json
@@ -35,7 +36,7 @@ services:
     configs:
       - source: traefik-dynamic
         target: /etc/traefik/dynamic.yaml
-    networks: [socket, vault, stats]
+    networks: [socket, vault, stats, errors]
     depends_on: [socket-proxy]
     read_only: true
     cap_drop: [ALL]
@@ -92,6 +93,19 @@ services:
       traefik.http.routers.stats.entrypoints: websecure
       traefik.http.services.stats.loadbalancer.server.port: "8080"
 
+  # The page visitors see while a site restarts (502-504) and for unknown host names (404); Traefik
+  # uses it through traefik-dynamic.yaml. Self-contained HTML, no external resources.
+  error-pages:
+    image: tarampampam/error-pages:4.2
+    restart: unless-stopped
+    environment:
+      TEMPLATE_NAME: app-down
+      SEND_SAME_HTTP_CODE: "true"
+    read_only: true
+    cap_drop: [ALL]
+    mem_limit: 32m
+    networks: [errors]
+
 # A file, not inline content: Compose copies inline content into the container, which a read-only
 # container refuses; a file is mounted.
 configs:
@@ -103,6 +117,8 @@ configs:
 # they all show up as the bridge gateway).
 networks:
   socket:
+    internal: true
+  errors:
     internal: true
   vault:
     enable_ipv6: true

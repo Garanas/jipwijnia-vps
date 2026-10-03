@@ -8,15 +8,17 @@ is the runbook; keep it in step with every change.
   and in GitHub secrets.
 - The server fetches files from `main` via `raw.githubusercontent.com` (`setup.sh`, the
   `compose.yaml` + `traefik-dynamic.yaml` update in the README): what is on `main` is what the
-  server should run. A new file the stack needs must be fetched in both places.
+  server should run. A new file the stack needs must be fetched in both places; a script the server
+  runs (`vault-deploy.sh`, `stack-update.sh`) is installed by `setup.sh`.
 - `setup.sh` must stay idempotent and must never lock the admin out: root/password SSH only goes off
   once the admin user has a key and can sudo.
 - Only Traefik publishes ports. Sites get Traefik labels and their own network shared with Traefik,
-  never `ports:` (Docker bypasses `ufw`). Traefik never gets the Docker socket, only `socket-proxy`.
+  never `ports:` (Docker bypasses `ufw`). Nothing gets the Docker socket but `socket-proxy`, which
+  allows `GET` only.
 - Rolling out `compose.yaml` stays manual. The automated paths are the vault's deploy key, forced
   to `vault-deploy` (`vault-deploy.sh`, image pull + restart, root via a no-arguments sudo rule;
-  `deploy` stays out of the `docker` group), and `stack-update.timer` (weekly pull
-  of the other images under their existing tags). Don't widen what a CI key can do.
+  `deploy` stays out of the `docker` group), and `stack-update.timer` (`stack-update.sh`: weekly
+  pull of every other image under its existing tag). Don't widen what a CI key can do.
 - Shell: bash, `set -euo pipefail`, LF line endings, must pass shellcheck (`.github/workflows/check.yml`).
 - An agent cannot SSH in non-interactively (the admin key has a passphrase): give the user the
   commands to run and ask for the output.
