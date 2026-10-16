@@ -1,5 +1,5 @@
 # Everything that runs on the VPS: Traefik in front (HTTPS with Let's Encrypt, HTTP → HTTPS), the
-# replay vault (github.com/Garanas/scfa-cs-replay), GoatCounter and error pages. Other sites, such as
+# replay vault (github.com/Garanas/faf-workshop), GoatCounter and error pages. Other sites, such as
 # jipwijnia.nl, join as extra services with their own traefik.* labels. See README.md.
 #
 #   cp .env.example .env    # once, then fill it in
@@ -55,7 +55,7 @@ services:
     mem_limit: 64m
 
   vault:
-    image: ${VAULT_IMAGE:-ghcr.io/garanas/scfa-cs-replay:latest}
+    image: ${VAULT_IMAGE:-ghcr.io/garanas/faf-workshop:latest}
     restart: unless-stopped
     environment:
       # Trust X-Forwarded-For from Traefik: the container publishes no ports and shares its

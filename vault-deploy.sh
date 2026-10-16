@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Updates the vault to the latest image. The forced command of the deploy key that the
-# scfa-cs-replay workflow uses (Garanas/scfa-cs-replay, .github/workflows/docker.yml): setup.sh
+# faf-workshop workflow uses (Garanas/faf-workshop, .github/workflows/docker.yml): setup.sh
 # installs it root-owned as /usr/local/bin/vault-deploy, and the key's line in
 # /home/deploy/.ssh/authorized_keys runs nothing else, whatever the client asks for:
 #

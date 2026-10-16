@@ -5,7 +5,7 @@ Configuration of the VPS behind `*.jipwijnia.nl`: one Docker Compose stack with 
 
 | Site | What | Source |
 |---|---|---|
-| https://vault.jipwijnia.nl | Replay vault for Supreme Commander: Forged Alliance Forever | [Garanas/scfa-cs-replay](https://github.com/Garanas/scfa-cs-replay) (image `ghcr.io/garanas/scfa-cs-replay`) |
+| https://vault.jipwijnia.nl | Replay vault for Supreme Commander: Forged Alliance Forever | [Garanas/faf-workshop](https://github.com/Garanas/faf-workshop) (image `ghcr.io/garanas/faf-workshop`) |
 | https://stats.jipwijnia.nl | Visitor statistics ([GoatCounter](https://www.goatcounter.com)): no cookies, no personal data | `arp242/goatcounter` |
 
 The server: TransIP VPS (1 vCPU, 1 GB), Ubuntu 26.04 LTS. Plenty: the vault parses replays in the
@@ -33,8 +33,8 @@ docker compose -f compose.yaml -f compose.local.yaml up -d
 docker compose -f compose.yaml -f compose.local.yaml down
 ```
 
-To try an unreleased vault, build it in scfa-cs-replay (`docker build -t scfa-cs-replay:local .`) and
-start with `VAULT_IMAGE=scfa-cs-replay:local`.
+To try an unreleased vault, build it in faf-workshop (`docker build -t faf-workshop:local .`) and
+start with `VAULT_IMAGE=faf-workshop:local`.
 
 ## First-time server setup
 
@@ -116,12 +116,12 @@ service that leaves a network behind (e.g. after a rename) needs a `docker netwo
 
 ## Releasing the vault
 
-Releases come from the scfa-cs-replay repository: `git push origin main:deploy/production` tests,
-builds and pushes `ghcr.io/garanas/scfa-cs-replay:latest` and `:sha-<commit>`, then its `deploy` job
+Releases come from the faf-workshop repository: `git push origin main:deploy/production` tests,
+builds and pushes `ghcr.io/garanas/faf-workshop:latest` and `:sha-<commit>`, then its `deploy` job
 connects as the user `deploy` and runs `vault-deploy` (as root, through its sudo rule): pull the
 image, restart the vault. Nothing else. The commit that is live shows in the vault's footer.
 
-Roll back by setting `VAULT_IMAGE=ghcr.io/garanas/scfa-cs-replay:sha-<commit>` in `/opt/vault/.env`
+Roll back by setting `VAULT_IMAGE=ghcr.io/garanas/faf-workshop:sha-<commit>` in `/opt/vault/.env`
 and running `docker compose up -d`; while that pin is in place, deploys keep pulling the pinned image.
 
 ### Deploy key (once, or to replace it)
@@ -136,7 +136,7 @@ and running `docker compose up -d`; while that pin is in place, deploys keep pul
    echo 'command="/usr/local/bin/vault-deploy",restrict <contents of github-deploy.pub>' \
        | sudo tee /home/deploy/.ssh/authorized_keys
    ```
-3. scfa-cs-replay on GitHub → Settings → Environments → `production` (limited to the
+3. faf-workshop on GitHub → Settings → Environments → `production` (limited to the
    `deploy/production` branch), three environment **secrets**:
    - `DEPLOY_SSH_KEY`: the contents of `github-deploy` (the private key);
    - `DEPLOY_HOST`: `37.97.229.165`;

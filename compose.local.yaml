@@ -4,7 +4,7 @@
 #
 # Then open http://vault.localhost and http://stats.localhost (or https:// with Traefik's
 # self-signed certificate). Signing in to the vault does not work here: its production redirect
-# URI points at vault.jipwijnia.nl. Try an unreleased vault with VAULT_IMAGE=scfa-cs-replay:local.
+# URI points at vault.jipwijnia.nl. Try an unreleased vault with VAULT_IMAGE=faf-workshop:local.
 
 services:
   traefik:
